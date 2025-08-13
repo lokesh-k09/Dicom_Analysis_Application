@@ -9,44 +9,37 @@ import os
 import logging
 from pathlib import Path
 
-# Ensure proper working directory
-if hasattr(sys, '_MEIPASS'):
-    # Running as PyInstaller bundle
-    os.chdir(sys._MEIPASS)
-else:
-    # Running as script
-    os.chdir(Path(__file__).parent)
 
-try:
-    # Import our modules
-    from desktop_backend import backend
-    from desktop_gui import MRIAnalysisApp
+def _set_working_dir():
+    # Keep this only for data/assets; imports should be absolute.
+    if hasattr(sys, "_MEIPASS"):
+        os.chdir(sys._MEIPASS)
+    else:
+        os.chdir(Path(__file__).parent)
+
+
+def main():
+    _set_working_dir()
+
+    # Imports are inside main to avoid side effects during multiprocessing spawn.
+    from desktop_app.desktop_backend import backend
+    from desktop_app.desktop_gui import MRIAnalysisApp
     import flet as ft
-    
-    def main():
-        """Main function to start the application."""
-        # Configure logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler('app.log'),
-                logging.StreamHandler()
-            ]
-        )
-        
-        # Create and run the Flet application
-        app = MRIAnalysisApp(backend)
-        ft.app(target=app.main, view=ft.AppView.FLET_APP)
 
-    if __name__ == "__main__":
-        main()
+    # Configure logging (file + console).
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler("app.log"), logging.StreamHandler()],
+    )
 
-except ImportError as e:
-    print(f"Error importing modules: {e}")
-    print("Please ensure all dependencies are installed:")
-    print("pip install -r requirements.txt")
-    sys.exit(1)
-except Exception as e:
-    print(f"Error starting application: {e}")
-    sys.exit(1) 
+    app = MRIAnalysisApp(backend)
+    ft.app(target=app.main, view=ft.AppView.FLET_APP)
+
+
+if __name__ == "__main__":
+    # REQUIRED for Windows/PyInstaller when using multiprocessing
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+    main()

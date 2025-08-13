@@ -1,15 +1,19 @@
-# desktop_gui.py
 import sys
 import os
 import time
 import json
 import threading
 import subprocess
+import multiprocessing
 from pathlib import Path
 
 import requests
 import pandas as pd
 import flet as ft
+
+# Import here so PyInstaller sees the module and bundles it.
+# (We will still call its function in a child process.)
+from desktop_app import gui_app
 
 
 class MRIAnalysisApp:
@@ -33,12 +37,14 @@ class MRIAnalysisApp:
         self.dat_btn = None
         self.results_container = None
 
+        # handle for child DAT GUI process
+        self._dat_process: multiprocessing.Process | None = None
+
         # Start backend server
         self.start_backend()
 
     # ---------- helpers ----------
     def _resource_path(self, name: str) -> Path:
-        """Return absolute path to a bundled or source file."""
         base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
         return (base / name).resolve()
 
@@ -48,7 +54,7 @@ class MRIAnalysisApp:
             try:
                 _, actual_port = self.backend.start_server()
                 self.backend_url = f"http://127.0.0.1:{actual_port}"
-                time.sleep(2)  # give server a sec to boot
+                time.sleep(2)
                 self.server_running = True
                 print(f"Backend server started on port {actual_port}")
             except Exception as e:
@@ -103,7 +109,6 @@ class MRIAnalysisApp:
         try:
             resp = requests.post(f"{self.backend_url}/upload-folder/", files=files)
         finally:
-            # Always close file handles
             for _, (_, fobj) in files:
                 fobj.close()
 
@@ -118,7 +123,8 @@ class MRIAnalysisApp:
             try:
                 self.weekly_btn.disabled = True
                 self.weekly_btn.text = "Processing..."
-                if self.page: self.page.update()
+                if self.page:
+                    self.page.update()
 
                 self.upload_files(self.selected_folder)
                 r = requests.post(f"{self.backend_url}/process-folder/", timeout=300)
@@ -135,7 +141,8 @@ class MRIAnalysisApp:
             finally:
                 self.weekly_btn.disabled = False
                 self.weekly_btn.text = "Process Weekly"
-                if self.page: self.page.update()
+                if self.page:
+                    self.page.update()
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -147,7 +154,8 @@ class MRIAnalysisApp:
             try:
                 self.nema_btn.disabled = True
                 self.nema_btn.text = "Processing..."
-                if self.page: self.page.update()
+                if self.page:
+                    self.page.update()
 
                 self.upload_files(self.selected_folder)
                 r = requests.post(f"{self.backend_url}/process-nema-body/", timeout=300)
@@ -164,7 +172,8 @@ class MRIAnalysisApp:
             finally:
                 self.nema_btn.disabled = False
                 self.nema_btn.text = "Process NEMA Body"
-                if self.page: self.page.update()
+                if self.page:
+                    self.page.update()
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -176,7 +185,8 @@ class MRIAnalysisApp:
             try:
                 self.torso_btn.disabled = True
                 self.torso_btn.text = "Processing..."
-                if self.page: self.page.update()
+                if self.page:
+                    self.page.update()
 
                 self.upload_files(self.selected_folder)
                 r = requests.post(f"{self.backend_url}/process-torso/", timeout=300)
@@ -193,21 +203,28 @@ class MRIAnalysisApp:
             finally:
                 self.torso_btn.disabled = False
                 self.torso_btn.text = "Process Torso"
-                if self.page: self.page.update()
+                if self.page:
+                    self.page.update()
 
         threading.Thread(target=run, daemon=True).start()
 
     # ---------- .DAT Processor launcher ----------
     def open_dat_gui(self, e):
-        """Launch your Tkinter .DAT Processor (gui_app.py) in a separate window."""
+        """
+        Launch Tkinter .DAT Processor in its own PROCESS inside this same EXE.
+        This avoids spawning another copy of the Flet app and keeps distribution single-EXE.
+        """
         try:
-            gui_path = self._resource_path("gui_app.py")
-            creationflags = subprocess.CREATE_NEW_CONSOLE if sys.platform.startswith("win") else 0
-            subprocess.Popen(
-                [sys.executable, str(gui_path)],
-                cwd=str(gui_path.parent),
-                creationflags=creationflags
+            # If a previous child is still alive, don't spawn another.
+            if self._dat_process and self._dat_process.is_alive():
+                return
+
+            # Target is the function inside desktop_app.gui_app
+            self._dat_process = multiprocessing.Process(
+                target=gui_app.dat_gui_main, name="DAT_PPM_Processor"
             )
+            self._dat_process.daemon = True  # child dies with parent
+            self._dat_process.start()
         except Exception as ex:
             print(f"Failed to launch .DAT GUI: {ex}")
 
@@ -252,6 +269,7 @@ class MRIAnalysisApp:
             r = requests.get(f"{self.backend_url}/download-metrics", timeout=30)
             if r.status_code == 200:
                 downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+                os.makedirs(downloads, exist_ok=True)
                 fp = os.path.join(downloads, "weekly_metrics.xlsx")
                 with open(fp, "wb") as f:
                     f.write(r.content)
@@ -266,6 +284,7 @@ class MRIAnalysisApp:
             r = requests.get(f"{self.backend_url}/download-nema-body", timeout=30)
             if r.status_code == 200:
                 downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+                os.makedirs(downloads, exist_ok=True)
                 fp = os.path.join(downloads, "nema_body_metrics.xlsx")
                 with open(fp, "wb") as f:
                     f.write(r.content)
@@ -280,6 +299,7 @@ class MRIAnalysisApp:
             r = requests.get(f"{self.backend_url}/download-torso", timeout=30)
             if r.status_code == 200:
                 downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+                os.makedirs(downloads, exist_ok=True)
                 fp = os.path.join(downloads, "torso_coil_analysis.xlsx")
                 with open(fp, "wb") as f:
                     f.write(r.content)
@@ -431,7 +451,7 @@ class MRIAnalysisApp:
                 )
             )
 
-        # Open output folder button (if anything has been shown)
+        # Open output folder button
         if (
             self.weekly_results is not None
             or self.nema_results is not None
@@ -491,7 +511,6 @@ class MRIAnalysisApp:
             width=200,
             height=50,
         )
-        # NEW: .DAT Processor button
         self.dat_btn = ft.ElevatedButton(
             "DAT PPM Processor",
             on_click=self.open_dat_gui,
@@ -535,7 +554,6 @@ class MRIAnalysisApp:
                         border_radius=10,
                         margin=ft.margin.only(bottom=20),
                     ),
-                    # Buttons row (now has 4 buttons)
                     ft.Container(
                         content=ft.Row(
                             [self.weekly_btn, self.nema_btn, self.torso_btn, self.dat_btn],
@@ -559,11 +577,14 @@ class MRIAnalysisApp:
 
 
 def main():
-    from desktop_backend import backend
+    from desktop_app.desktop_backend import backend
     app = MRIAnalysisApp(backend)
-    # Use the app's main as target (avoid recursion)
     ft.app(target=app.main, view=ft.AppView.FLET_APP)
 
 
 if __name__ == "__main__":
+    # Safety for multiprocessing if run directly
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     main()
